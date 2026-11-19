@@ -1,0 +1,130 @@
+# ==============================================================================
+# Master .gitignore
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Datasets & Benchmarks (STRICTLY EXCLUDED)
+# ------------------------------------------------------------------------------
+# Exclude all tabular dataset and benchmark files anywhere in the repo
+*.csv
+*.tsv
+*.parquet
+*.h5
+*.feather
+
+# Exclude storage dataset, benchmark, and experiment data directories
+storage/datasets/
+storage/benchmarks/
+storage/experiments/
+
+# ------------------------------------------------------------------------------
+# 2. Ephemeral Model Storage & Runtime Checkpoints
+# ------------------------------------------------------------------------------
+# Exclude dynamically generated client uploads and round candidate models
+storage/candidates/
+storage/client-updates/
+storage/global-models/global-v*
+storage/backups/
+storage/*.json
+
+# Explicitly ensure initial baseline model is preserved
+!storage/global-models/initial-v1/
+!storage/global-models/initial-v1/**
+
+# ------------------------------------------------------------------------------
+# 3. Environment & Sensitive Credentials
+# ------------------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+*.env
+!*.env.example
+*.pem
+*.key
+*.cert
+
+# ------------------------------------------------------------------------------
+# 4. Database Clusters & System Logs
+# ------------------------------------------------------------------------------
+pgdata/
+pgdata18/
+pg.log
+*.log
+*.pid
+
+# ------------------------------------------------------------------------------
+# 5. Dependencies & Build Artifacts
+# ------------------------------------------------------------------------------
+node_modules/
+package-lock.json.bak
+dist/
+build/
+out/
+.pnp
+.pnp.js
+
+# ------------------------------------------------------------------------------
+# 6. Python & Machine Learning Caches
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+.pytest_cache/
+
+# ------------------------------------------------------------------------------
+# 7. Archives & Compressed Files
+# ------------------------------------------------------------------------------
+*.zip
+*.tar.gz
+*.7z
+ARC_FL_Project.zip.zip
+frontend.zip
+
+# ------------------------------------------------------------------------------
+# 8. Presentations & Generated Document Outputs (Contains metadata & older names)
+# ------------------------------------------------------------------------------
+documentation_output/
+presentations/
+
+# ------------------------------------------------------------------------------
+# 9. Development & Diagnostic Markdown Reports (Kept local, excluded from Git)
+# ------------------------------------------------------------------------------
+API_DOCUMENTATION.md
+ARCHITECTURE_AUDIT.md
+ARC_FL_DEMO_READINESS_CHECKLIST.md
+ARC_FL_END_TO_END_ACCEPTANCE_REPORT.md
+ARC_FL_HISTORICAL_AND_LIVE_TRAINING_AUDIT.md
+ARC_FL_POST_ROUND28_INDEPENDENT_AUDIT.md
+ARC_FL_REMAINING_WORK.md
+CLIENT_TRAINING_MONITOR_IMPLEMENTATION_REPORT.md
+EXPERIMENT_*.md
+FINAL_*.md
+GLOBAL_V22_*.md
+IMPLEMENTATION_DISCREPANCY_REPORT.md
+LIVE_*.md
+ORIGINAL_MODEL_ACCURACY_INVESTIGATION.md
+PROJECT_NOTES.md
+REMEDIATION_RESULTS.md
+RESEARCH_EVALUATION_PROTOCOL.md
+REVIEW_DEMO_GUIDE.md
+ROUND_MANAGEMENT.md
+
+# ------------------------------------------------------------------------------
+# 10. Scratch Scripts & Local Edge Workspaces
+# ------------------------------------------------------------------------------
+scratch/
+agent_workspace/
+
+# ------------------------------------------------------------------------------
+# 11. OS & IDE Metadata
+# ------------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

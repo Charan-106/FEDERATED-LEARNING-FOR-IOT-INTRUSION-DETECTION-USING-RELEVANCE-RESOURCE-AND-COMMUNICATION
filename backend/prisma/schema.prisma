@@ -1,0 +1,385 @@
+// ARC Federated Learning Platform - Prisma Schema
+// PostgreSQL 18 database schema for the platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum UserRole {
+  ADMIN
+  CLIENT
+}
+
+enum ClientStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum RoundStatus {
+  CREATED
+  ACTIVE
+  AGGREGATING
+  COMPLETED
+  FAILED
+  CANCELLED
+  ARCHIVED
+}
+
+enum SubmissionStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  AGGREGATED
+}
+
+enum AggregationStrategy {
+  FEDAVG
+  EQUAL
+  ARC_WEIGHTED
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+// ============================================================
+// USERS & AUTH
+// ============================================================
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String
+  role         UserRole @default(CLIENT)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  clientProfile ClientProfile?
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+// ============================================================
+// CLIENT PROFILES
+// ============================================================
+
+model ClientProfile {
+  id             String       @id @default(uuid())
+  userId         String       @unique @map("user_id")
+  clientId       String       @unique @map("client_id") // e.g. "client-001"
+  name           String
+  ipAddress      String?      @map("ip_address")
+  hardwareSpecs  Json?        @map("hardware_specs")  // CPU, RAM, GPU info
+  status         ClientStatus @default(ACTIVE)
+  lastActiveAt   DateTime?    @map("last_active_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  submissions ClientSubmission[]
+  arcScores   ARCScore[]
+
+  @@map("client_profiles")
+}
+
+// ============================================================
+// GLOBAL MODELS
+// ============================================================
+
+model GlobalModel {
+  id               String   @id @default(uuid())
+  version          String   @unique // e.g. "initial-v1", "round-1-v2"
+  name             String
+  architecture     String   // e.g. "preact_resmlp_v3"
+  inputFeatures    Int      @map("input_features")  // 45 for CICIoT2023
+  numClasses       Int      @map("num_classes")     // 34 attack classes
+  totalParameters  Int      @map("total_parameters")
+  storagePath      String   @map("storage_path")    // relative path in storage/global-models/
+  checksumSha256   String?  @map("checksum_sha256")
+  isActive         Boolean  @default(false) @map("is_active")
+  baselineAccuracy Float?   @map("baseline_accuracy") // in percent, e.g. 98.50
+  baselineLoss     Float?   @map("baseline_loss")
+  role             String?  @default("HISTORICAL") // "INITIAL_BASELINE", "PREVIOUS_BEST", "ACTIVE_GLOBAL", "HISTORICAL", "CANDIDATE"
+  macroF1          Float?   @map("macro_f1")
+  weightedF1       Float?   @map("weighted_f1")
+  macroPrecision   Float?   @map("macro_precision")
+  macroRecall      Float?   @map("macro_recall")
+  benchmarkName    String?  @default("benchmark_primary_capped.csv") @map("benchmark_name")
+  sampleCount      Int?     @default(5000) @map("sample_count")
+  parentModelId    String?  @map("parent_model_id")
+  sourceRoundId    String?  @map("source_round_id")
+  aggregationStrategy AggregationStrategy? @map("aggregation_strategy")
+  participatingClients Json? @map("participating_clients")
+  publishedAt      DateTime? @map("published_at")
+  publishedBy      String?   @map("published_by")
+  publicationStatus String   @default("UNPUBLISHED") @map("publication_status") // "UNPUBLISHED", "PUBLISHED", "SUPERSEDED", "ROLLED_BACK", "PERMANENT_BASELINE"
+  metadataJson     Json?     @map("metadata_json")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  parentModel    GlobalModel?    @relation("ModelLineage", fields: [parentModelId], references: [id])
+  childModels    GlobalModel[]   @relation("ModelLineage")
+  baseRounds     TrainingRound[] @relation("BaseModel")
+  resultingRounds TrainingRound[] @relation("ResultingModel")
+  evaluations    EvaluationResult[]
+
+  initialModelRefs      SystemModelReference[] @relation("InitialModelRef")
+  previousBestModelRefs SystemModelReference[] @relation("PreviousBestModelRef")
+  activeGlobalModelRefs SystemModelReference[] @relation("ActiveGlobalModelRef")
+
+  @@map("global_models")
+}
+
+model SystemModelReference {
+  id                  String   @id @default("active_references")
+  initialModelId      String   @map("initial_model_id")
+  previousBestModelId String?  @map("previous_best_model_id")
+  activeGlobalModelId String   @map("active_global_model_id")
+  bestSelectionReason String?  @map("best_selection_reason")
+  selectionPolicy     String   @default("MULTI_METRIC_VALIDATED_BENCHMARK_V1") @map("selection_policy")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  initialModel      GlobalModel  @relation("InitialModelRef", fields: [initialModelId], references: [id])
+  previousBestModel GlobalModel? @relation("PreviousBestModelRef", fields: [previousBestModelId], references: [id])
+  activeGlobalModel GlobalModel  @relation("ActiveGlobalModelRef", fields: [activeGlobalModelId], references: [id])
+
+  @@map("system_model_references")
+}
+
+// ============================================================
+// TRAINING ROUNDS
+// ============================================================
+
+model TrainingRound {
+  id                  String      @id @default(uuid())
+  roundNumber         Int         @unique @map("round_number")
+  name                String?
+  description         String?
+  status              RoundStatus @default(CREATED)
+  baseModelId         String      @map("base_model_id")
+  resultingModelId    String?     @map("resulting_model_id")
+  aggregationStrategy AggregationStrategy? @map("aggregation_strategy")
+  clientCount         Int         @default(0) @map("client_count")
+  targetClients       Json?       @map("target_clients")
+  hyperparameters     Json?
+  arcWeights          Json?       @map("arc_weights")
+  startedAt           DateTime?   @map("started_at")
+  completedAt         DateTime?   @map("completed_at")
+  archivedAt          DateTime?   @map("archived_at")
+  archivedBy          String?     @map("archived_by")
+  archiveReason       String?     @map("archive_reason")
+  baseModelChecksum   String?     @map("base_model_checksum")
+  createdAt           DateTime    @default(now()) @map("created_at")
+
+  baseModel      GlobalModel        @relation("BaseModel", fields: [baseModelId], references: [id])
+  resultingModel GlobalModel?       @relation("ResultingModel", fields: [resultingModelId], references: [id])
+  submissions    ClientSubmission[]
+  arcScores      ARCScore[]
+  aggregationJobs AggregationJob[]
+
+  @@map("training_rounds")
+}
+
+// ============================================================
+// CLIENT SUBMISSIONS
+// ============================================================
+
+model ClientSubmission {
+  id                      String           @id @default(uuid())
+  roundId                 String           @map("round_id")
+  clientId                String           @map("client_id") // references ClientProfile.clientId
+  status                  SubmissionStatus @default(PENDING)
+  localAccuracy           Float?           @map("local_accuracy")  // accuracy on local test split
+  localLoss               Float?           @map("local_loss")
+  samplesTrained          Int?             @map("samples_trained")
+  epochs                  Int?
+  batchSize               Int?             @map("batch_size")
+  learningRate            Float?           @map("learning_rate")
+  trainingDurationSeconds Float?           @map("training_duration_seconds")
+  storagePath             String?          @map("storage_path")    // path to .pt file
+  checksumSha256          String?          @map("checksum_sha256")
+  isCompatible            Boolean          @default(true) @map("is_compatible")
+  validationMessage       String?          @map("validation_message")
+  arcScore                Float?           @map("arc_score")       // cached overall ARC score
+  submittedAt             DateTime         @default(now()) @map("submitted_at")
+  reviewedAt              DateTime?        @map("reviewed_at")
+  reviewedBy              String?          @map("reviewed_by")     // admin user id
+
+  round         TrainingRound   @relation(fields: [roundId], references: [id])
+  client        ClientProfile   @relation(fields: [clientId], references: [clientId])
+  arcScores     ARCScore[]
+  aggregationWeights AggregationWeight[]
+
+  @@map("client_submissions")
+}
+
+// ============================================================
+// ARC SCORES
+// ============================================================
+
+model ARCScore {
+  id                   String   @id @default(uuid())
+  roundId              String   @map("round_id")
+  submissionId         String   @map("submission_id")
+  clientId             String   @map("client_id")
+
+  // Top-level ARC formula: ARC_i = lambda_R*R_i + lambda_S*S_i + lambda_C*C_i
+  relevanceScore       Float    @map("relevance_score")     // R_i in [0, 100]
+  resourceScore        Float    @map("resource_score")      // S_i in [0, 100]
+  communicationScore   Float    @map("communication_score") // C_i in [0, 100]
+  overallArcScore      Float    @map("overall_arc_score")   // ARC_i in [0, 100]
+
+  // Relevance sub-scores: R_i = 0.60*Q_i + 0.40*D_i
+  qualityScore         Float?   @map("quality_score")       // Q_i - data quality
+  diversityScore       Float?   @map("diversity_score")     // D_i - class diversity
+
+  // Resource sub-scores: S_i = 0.40*M_i + 0.40*P_i + 0.20*A_i
+  memoryScore          Float?   @map("memory_score")        // M_i - RAM availability
+  processingScore      Float?   @map("processing_score")    // P_i - CPU availability
+  capacityScore        Float?   @map("capacity_score")      // A_i - throughput/capacity
+
+  // Communication sub-scores: C_i = 0.50*B_i + 0.30*L_i + 0.20*T_i
+  bandwidthScore       Float?   @map("bandwidth_score")     // B_i
+  latencyScore         Float?   @map("latency_score")       // L_i
+  reliabilityScore     Float?   @map("reliability_score")   // T_i
+
+  formulaVersion       String   @default("1.0") @map("formula_version")
+  weightsUsedJson      Json?    @map("weights_used_json")   // snapshot of ARCConfig used
+  rawTelemetryJson     Json?    @map("raw_telemetry_json")  // raw metrics from client
+  calculatedAt         DateTime @default(now()) @map("calculated_at")
+
+  round      TrainingRound    @relation(fields: [roundId], references: [id])
+  submission ClientSubmission @relation(fields: [submissionId], references: [id])
+  client     ClientProfile    @relation(fields: [clientId], references: [clientId])
+
+  @@map("arc_scores")
+}
+
+// ============================================================
+// AGGREGATION JOBS
+// ============================================================
+
+model AggregationJob {
+  id                   String              @id @default(uuid())
+  roundId              String              @map("round_id")
+  strategy             AggregationStrategy
+  status               JobStatus           @default(PENDING)
+  selectedClientCount  Int                 @map("selected_client_count")
+  candidateModelPath   String?             @map("candidate_model_path") // in storage/candidates/
+  candidateChecksum    String?             @map("candidate_checksum")
+  evaluationReportJson Json?               @map("evaluation_report_json")
+  performedBy          String?             @map("performed_by")        // admin user id
+  createdAt            DateTime            @default(now()) @map("created_at")
+  completedAt          DateTime?           @map("completed_at")
+
+  round   TrainingRound       @relation(fields: [roundId], references: [id])
+  weights AggregationWeight[]
+
+  @@map("aggregation_jobs")
+}
+
+model AggregationWeight {
+  id               String  @id @default(uuid())
+  aggregationJobId String  @map("aggregation_job_id")
+  submissionId     String  @map("submission_id")
+  clientId         String  @map("client_id")
+  rawWeight        Float   @map("raw_weight")        // before normalization
+  normalizedWeight Float   @map("normalized_weight") // after normalization (sums to 1.0)
+  clientSamples    Int?    @map("client_samples")    // sample count used for FedAvg
+  arcScore         Float?  @map("arc_score")         // ARC score used for ARC_WEIGHTED
+
+  aggregationJob AggregationJob   @relation(fields: [aggregationJobId], references: [id])
+  submission     ClientSubmission @relation(fields: [submissionId], references: [id])
+
+  @@map("aggregation_weights")
+}
+
+// ============================================================
+// EVALUATION RESULTS
+// ============================================================
+
+model EvaluationResult {
+  id                      String   @id @default(uuid())
+  globalModelId           String   @map("global_model_id")
+  datasetName             String   @map("dataset_name")   // e.g. "CICIoT2023-validation"
+  sampleCount             Int      @map("sample_count")
+  accuracy                Float
+  macroPrecision          Float    @map("macro_precision")
+  macroRecall             Float    @map("macro_recall")
+  macroF1                 Float    @map("macro_f1")
+  loss                    Float
+  confusionMatrixJson     Json?    @map("confusion_matrix_json")
+  isApproved              Boolean  @default(false) @map("is_approved")
+  evaluationDurationSeconds Float? @map("evaluation_duration_seconds")
+  evaluatedAt             DateTime @default(now()) @map("evaluated_at")
+
+  globalModel GlobalModel @relation(fields: [globalModelId], references: [id])
+
+  @@map("evaluation_results")
+}
+
+// ============================================================
+// ARC CONFIGURATION
+// ============================================================
+
+model ARCConfig {
+  id        String   @id @default(uuid())
+  version   String   @default("1.0")
+  isActive  Boolean  @default(true) @map("is_active")
+
+  // Top-level lambda weights (must sum to 1.0)
+  lambdaRelevance      Float @default(0.40) @map("lambda_relevance")       // weight for R_i
+  lambdaResource       Float @default(0.30) @map("lambda_resource")        // weight for S_i
+  lambdaCommunication  Float @default(0.30) @map("lambda_communication")   // weight for C_i
+
+  // Relevance sub-weights (must sum to 1.0)
+  weightQuality        Float @default(0.60) @map("weight_quality")          // Q_i in R
+  weightDiversity      Float @default(0.40) @map("weight_diversity")        // D_i in R
+
+  // Resource sub-weights (must sum to 1.0)
+  weightMemory         Float @default(0.40) @map("weight_memory")           // M_i in S
+  weightProcessing     Float @default(0.40) @map("weight_processing")       // P_i in S
+  weightCapacity       Float @default(0.20) @map("weight_capacity")         // A_i in S
+
+  // Communication sub-weights (must sum to 1.0)
+  weightBandwidth      Float @default(0.50) @map("weight_bandwidth")        // B_i in C
+  weightLatency        Float @default(0.30) @map("weight_latency")          // L_i in C
+  weightReliability    Float @default(0.20) @map("weight_reliability")      // T_i in C
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("arc_configs")
+}
+
+// ============================================================
+// AUDIT LOG
+// ============================================================
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  userId       String?  @map("user_id")
+  action       String   // e.g. "LOGIN", "SUBMIT_UPDATE", "AGGREGATE", "PUBLISH_MODEL"
+  resourceType String?  @map("resource_type") // e.g. "GlobalModel", "TrainingRound"
+  resourceId   String?  @map("resource_id")
+  detailsJson  Json?    @map("details_json")
+  ipAddress    String?  @map("ip_address")
+  timestamp    DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
