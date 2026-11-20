@@ -88,7 +88,7 @@ export default function AdminArcPage() {
         })
       }
     } catch (err) {
-      setError(err.message)
+      setError(err.response?.data?.message || err.response?.data?.error || err.message)
     } finally {
       setLoading(false)
     }
@@ -100,12 +100,45 @@ export default function AdminArcPage() {
     parseFloat(weights.lambdaCommunication || 0)
   ).toFixed(2)
 
+  const relSum = (
+    parseFloat(weights.weightQuality || 0) +
+    parseFloat(weights.weightDiversity || 0)
+  ).toFixed(2)
+
+  const resSum = (
+    parseFloat(weights.weightMemory || 0) +
+    parseFloat(weights.weightProcessing || 0) +
+    parseFloat(weights.weightCapacity || 0)
+  ).toFixed(2)
+
+  const commSum = (
+    parseFloat(weights.weightBandwidth || 0) +
+    parseFloat(weights.weightLatency || 0) +
+    parseFloat(weights.weightReliability || 0)
+  ).toFixed(2)
+
   const isNormalized = Math.abs(parseFloat(topLevelSum) - 1.0) < 0.01
+  const isRelNormalized = Math.abs(parseFloat(relSum) - 1.0) < 0.01
+  const isResNormalized = Math.abs(parseFloat(resSum) - 1.0) < 0.01
+  const isCommNormalized = Math.abs(parseFloat(commSum) - 1.0) < 0.01
+  const allNormalized = isNormalized && isRelNormalized && isResNormalized && isCommNormalized
 
   async function handleSaveConfig(e) {
     e.preventDefault()
     if (!isNormalized) {
       alert(`Top-level weights must sum to 1.00 (currently ${topLevelSum}). Please adjust weights.`)
+      return
+    }
+    if (!isRelNormalized) {
+      alert(`Relevance sub-weights (Quality + Diversity) must sum to 1.00 (currently ${relSum}). Please adjust weights.`)
+      return
+    }
+    if (!isResNormalized) {
+      alert(`Resource sub-weights (Memory + Processing + Capacity) must sum to 1.00 (currently ${resSum}). Please adjust weights.`)
+      return
+    }
+    if (!isCommNormalized) {
+      alert(`Communication sub-weights (Bandwidth + Latency + Reliability) must sum to 1.00 (currently ${commSum}). Please adjust weights.`)
       return
     }
 
@@ -374,7 +407,14 @@ export default function AdminArcPage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Relevance sub-weights */}
             <div className="space-y-3 p-3 bg-gray-50 dark:bg-gray-800/60 rounded-lg">
-              <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Relevance: R = w_Q·Q + w_D·D</span>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Relevance: R = w_Q·Q + w_D·D</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${
+                  isRelNormalized ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-red-100 text-red-700'
+                }`}>
+                  {relSum} / 1.00
+                </span>
+              </div>
               <div>
                 <label className="text-xs text-gray-500">Quality Weight (w_Q)</label>
                 <input
@@ -403,7 +443,14 @@ export default function AdminArcPage() {
 
             {/* Resource sub-weights */}
             <div className="space-y-3 p-3 bg-gray-50 dark:bg-gray-800/60 rounded-lg">
-              <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Resource: S = w_M·M + w_P·P + w_A·A</span>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Resource: S = w_M·M + w_P·P + w_A·A</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${
+                  isResNormalized ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-red-100 text-red-700'
+                }`}>
+                  {resSum} / 1.00
+                </span>
+              </div>
               <div>
                 <label className="text-xs text-gray-500">Memory Weight (w_M)</label>
                 <input
@@ -444,7 +491,14 @@ export default function AdminArcPage() {
 
             {/* Communication sub-weights */}
             <div className="space-y-3 p-3 bg-gray-50 dark:bg-gray-800/60 rounded-lg">
-              <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Communication: C = w_B·B + w_L·L + w_T·T</span>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-gray-700 dark:text-gray-300">Communication: C = w_B·B + w_L·L + w_T·T</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${
+                  isCommNormalized ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-red-100 text-red-700'
+                }`}>
+                  {commSum} / 1.00
+                </span>
+              </div>
               <div>
                 <label className="text-xs text-gray-500">Bandwidth Weight (w_B)</label>
                 <input
@@ -500,7 +554,7 @@ export default function AdminArcPage() {
           <div className="flex items-center gap-2">
             <button
               type="submit"
-              disabled={saving || !isNormalized}
+              disabled={saving || !allNormalized}
               className="btn-primary flex items-center gap-2 px-5 py-2 font-semibold"
             >
               <Save size={16} />

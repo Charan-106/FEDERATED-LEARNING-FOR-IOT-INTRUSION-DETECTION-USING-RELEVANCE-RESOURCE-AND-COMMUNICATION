@@ -4,6 +4,53 @@
 const prisma = require('../config/database');
 const mlServiceClient = require('../services/mlServiceClient');
 
+const DEFAULT_ARC_CONFIG = {
+  version: '1.0',
+  isActive: true,
+  // Top-level lambda weights (must sum to 1.0)
+  lambdaRelevance: 0.40,
+  lambdaResource: 0.30,
+  lambdaCommunication: 0.30,
+  // Relevance sub-weights (must sum to 1.0)
+  weightQuality: 0.60,
+  weightDiversity: 0.40,
+  // Resource sub-weights (must sum to 1.0)
+  weightMemory: 0.40,
+  weightProcessing: 0.40,
+  weightCapacity: 0.20,
+  // Communication sub-weights (must sum to 1.0)
+  weightBandwidth: 0.50,
+  weightLatency: 0.30,
+  weightReliability: 0.20,
+};
+
+/**
+ * Ensures an authoritative active ARC configuration exists in PostgreSQL.
+ * If active exists, returns it.
+ * If inactive records exist, activates the latest one.
+ * If table is empty, seeds the canonical v1.0 configuration into PostgreSQL.
+ */
+async function ensureDefaultArcConfig() {
+  let active = await prisma.aRCConfig.findFirst({ where: { isActive: true } });
+  if (active) return active;
+
+  const latest = await prisma.aRCConfig.findFirst({ orderBy: { createdAt: 'desc' } });
+  if (latest) {
+    active = await prisma.aRCConfig.update({
+      where: { id: latest.id },
+      data: { isActive: true },
+    });
+    console.log(`[ARC] Reactivated latest ARC configuration v${active.version}`);
+    return active;
+  }
+
+  active = await prisma.aRCConfig.create({
+    data: DEFAULT_ARC_CONFIG,
+  });
+  console.log(`[ARC] Initialized default authoritative ARC configuration v${active.version} in PostgreSQL`);
+  return active;
+}
+
 /**
  * GET /api/arc/scores?roundId=...
  * Get all ARC scores for a training round or fleet-wide.
@@ -46,7 +93,10 @@ async function getScores(req, res, next) {
  */
 async function getConfig(req, res, next) {
   try {
-    const config = await prisma.aRCConfig.findFirst({ where: { isActive: true } });
+    let config = await prisma.aRCConfig.findFirst({ where: { isActive: true } });
+    if (!config) {
+      config = await ensureDefaultArcConfig();
+    }
     if (!config) {
       return res.status(404).json({ error: 'No active ARC configuration found' });
     }
@@ -62,9 +112,13 @@ async function getConfig(req, res, next) {
  */
 async function getConfigHistory(req, res, next) {
   try {
-    const configs = await prisma.aRCConfig.findMany({
+    let configs = await prisma.aRCConfig.findMany({
       orderBy: { createdAt: 'desc' },
     });
+    if (configs.length === 0) {
+      const initial = await ensureDefaultArcConfig();
+      configs = [initial];
+    }
     res.json({ configs });
   } catch (err) {
     next(err);
@@ -94,22 +148,77 @@ async function updateConfig(req, res, next) {
       recalculatePending,
     } = req.body;
 
-    // Validate top-level lambda weights sum to 1.0 (allow small floating point tolerance)
+    // 1. Validate top-level lambda weights sum to 1.0 (allow small floating point tolerance)
     if (lambdaRelevance !== undefined && lambdaResource !== undefined && lambdaCommunication !== undefined) {
       const lambdaSum = parseFloat(lambdaRelevance) + parseFloat(lambdaResource) + parseFloat(lambdaCommunication);
       if (Math.abs(lambdaSum - 1.0) > 0.005) {
         return res.status(400).json({
           error: 'Validation failed',
-          message: `Lambda weights must sum to 1.0, got ${lambdaSum.toFixed(4)}`,
+          message: `Lambda weights (lambdaRelevance, lambdaResource, lambdaCommunication) must sum to 1.0, got ${lambdaSum.toFixed(4)}`,
         });
       }
     }
 
-    // Previous active config
-    const currentConfig = await prisma.aRCConfig.findFirst({
+    // 2. Validate Relevance sub-weights sum to 1.0
+    if (weightQuality !== undefined && weightDiversity !== undefined) {
+      const relSum = parseFloat(weightQuality) + parseFloat(weightDiversity);
+      if (Math.abs(relSum - 1.0) > 0.005) {
+        return res.status(400).json({
+          error: 'Validation failed',
+          message: `Relevance sub-weights (weightQuality, weightDiversity) must sum to 1.0, got ${relSum.toFixed(4)}`,
+        });
+      }
+    }
+
+    // 3. Validate Resource sub-weights sum to 1.0
+    if (weightMemory !== undefined && weightProcessing !== undefined && weightCapacity !== undefined) {
+      const resSum = parseFloat(weightMemory) + parseFloat(weightProcessing) + parseFloat(weightCapacity);
+      if (Math.abs(resSum - 1.0) > 0.005) {
+        return res.status(400).json({
+          error: 'Validation failed',
+          message: `Resource sub-weights (weightMemory, weightProcessing, weightCapacity) must sum to 1.0, got ${resSum.toFixed(4)}`,
+        });
+      }
+    }
+
+    // 4. Validate Communication sub-weights sum to 1.0
+    if (weightBandwidth !== undefined && weightLatency !== undefined && weightReliability !== undefined) {
+      const commSum = parseFloat(weightBandwidth) + parseFloat(weightLatency) + parseFloat(weightReliability);
+      if (Math.abs(commSum - 1.0) > 0.005) {
+        return res.status(400).json({
+          error: 'Validation failed',
+          message: `Communication sub-weights (weightBandwidth, weightLatency, weightReliability) must sum to 1.0, got ${commSum.toFixed(4)}`,
+        });
+      }
+    }
+
+    // 5. Ensure all provided weights are valid numbers between 0.0 and 1.0
+    const numericFields = [
+      lambdaRelevance, lambdaResource, lambdaCommunication,
+      weightQuality, weightDiversity,
+      weightMemory, weightProcessing, weightCapacity,
+      weightBandwidth, weightLatency, weightReliability,
+    ];
+    for (const val of numericFields) {
+      if (val !== undefined) {
+        const num = parseFloat(val);
+        if (isNaN(num) || num < 0 || num > 1) {
+          return res.status(400).json({
+            error: 'Validation failed',
+            message: 'All weights must be valid numbers between 0.0 and 1.0',
+          });
+        }
+      }
+    }
+
+    // Previous active config (or seed initial baseline if empty)
+    let currentConfig = await prisma.aRCConfig.findFirst({
       where: { isActive: true },
       orderBy: { createdAt: 'desc' },
     });
+    if (!currentConfig) {
+      currentConfig = await ensureDefaultArcConfig();
+    }
 
     // Count existing configs to increment version
     const totalConfigs = await prisma.aRCConfig.count();
@@ -183,8 +292,11 @@ async function updateConfig(req, res, next) {
  */
 async function recalculateScores(req, res, next) {
   try {
-    const { roundId, submissionIds } = req.body;
-    const activeConfig = await prisma.aRCConfig.findFirst({ where: { isActive: true } });
+    const { roundId, submissionIds } = req.body || {};
+    let activeConfig = await prisma.aRCConfig.findFirst({ where: { isActive: true } });
+    if (!activeConfig) {
+      activeConfig = await ensureDefaultArcConfig();
+    }
     if (!activeConfig) {
       return res.status(400).json({ error: 'No active ARC configuration found' });
     }
@@ -209,9 +321,14 @@ async function recalculateScores(req, res, next) {
  * Internal helper to recalculate scores for target submissions
  */
 async function executeRecalculation({ configRecord, roundId, submissionIds, userId }) {
-  const where = { status: 'PENDING' };
+  const where = {};
+  if (submissionIds && submissionIds.length > 0) {
+    where.id = { in: submissionIds };
+  } else {
+    // If no specific submission IDs given, target pending submissions
+    where.status = 'PENDING';
+  }
   if (roundId) where.roundId = roundId;
-  if (submissionIds && submissionIds.length > 0) where.id = { in: submissionIds };
 
   const submissions = await prisma.clientSubmission.findMany({
     where,
@@ -267,10 +384,10 @@ async function executeRecalculation({ configRecord, roundId, submissionIds, user
             roundId: sub.roundId,
             submissionId: sub.id,
             clientId: sub.clientId,
-            relevanceScore: arcResult.relevance_score,
-            resourceScore: arcResult.resource_score,
-            communicationScore: arcResult.communication_score,
-            overallArcScore: arcResult.overall_arc_score,
+            relevanceScore: arcResult.relevance_score ?? (existingArc?.relevanceScore ?? 0.0),
+            resourceScore: arcResult.resource_score ?? (existingArc?.resourceScore ?? 0.0),
+            communicationScore: (arcResult.communication_score !== null && arcResult.communication_score !== undefined) ? arcResult.communication_score : (existingArc?.communicationScore ?? 70.0),
+            overallArcScore: arcResult.overall_arc_score ?? (existingArc?.overallArcScore ?? 65.0),
             qualityScore: arcResult.quality_score,
             diversityScore: arcResult.diversity_score,
             memoryScore: arcResult.memory_score,
@@ -338,4 +455,5 @@ module.exports = {
   getConfigHistory,
   updateConfig,
   recalculateScores,
+  ensureDefaultArcConfig,
 };

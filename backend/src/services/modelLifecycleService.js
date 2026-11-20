@@ -14,6 +14,49 @@ const INITIAL_MODEL_VERSION = 'initial-v1';
 const INITIAL_MODEL_SHA = '57b7afd9d01c30b48101fc2660d699ea1b5790104c00e534e00e090b517d4993';
 
 /**
+ * Synchronizes the filesystem active model pointer and model_config.json files
+ * with the authoritative active model from PostgreSQL.
+ */
+function syncFilesystemActiveModel(activeVersion) {
+  try {
+    const globalModelsDir = path.resolve(config.storage.root, 'global-models');
+    if (!fs.existsSync(globalModelsDir)) return;
+
+    // 1. Write active_model.json pointer for the Python ML service
+    const pointerFile = path.join(globalModelsDir, 'active_model.json');
+    fs.writeFileSync(pointerFile, JSON.stringify({
+      version: activeVersion,
+      isActive: true,
+      synchronizedAt: new Date().toISOString(),
+      authoritativeSource: 'PostgreSQL SystemModelReference'
+    }, null, 2));
+
+    // 2. Update model_config.json files across version subdirectories
+    const entries = fs.readdirSync(globalModelsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const configPath = path.join(globalModelsDir, entry.name, 'model_config.json');
+        if (fs.existsSync(configPath)) {
+          try {
+            const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            const shouldBeActive = entry.name === activeVersion;
+            if (cfg.isActive !== shouldBeActive) {
+              cfg.isActive = shouldBeActive;
+              fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
+            }
+          } catch (e) {
+            // Ignore parse errors on individual folders
+          }
+        }
+      }
+    }
+    console.log(`[ModelLifecycle] Filesystem active model pointer synchronized: ${activeVersion}`);
+  } catch (err) {
+    console.warn('[ModelLifecycle] Warning syncing filesystem active model:', err.message);
+  }
+}
+
+/**
  * Initializes and synchronizes the SystemModelReference table.
  * Ensures initial-v1 is locked as INITIAL_BASELINE, activeGlobalModelId is set,
  * and previousBestModelId is authoritatively tracked.
@@ -111,6 +154,8 @@ async function initModelReferences() {
       activeGlobalModel: { include: { evaluations: { orderBy: { evaluatedAt: 'desc' }, take: 1 } } },
     },
   });
+
+  syncFilesystemActiveModel(activeModel.version);
 
   return ref;
 }
@@ -490,6 +535,8 @@ async function publishCandidateModel({
     return createdModel;
   });
 
+  syncFilesystemActiveModel(finalVersion);
+
   return {
     success: true,
     message: `Model ${finalVersion} published successfully as active global model!`,
@@ -569,6 +616,8 @@ async function rollbackToModel({ modelId, reason, adminUser }) {
 
     return activated;
   });
+
+  syncFilesystemActiveModel(result.version);
 
   const updatedRefs = await getAuthoritativeReferences();
 

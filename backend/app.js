@@ -15,6 +15,7 @@ const config = require('./src/config');
 const prisma = require('./src/config/database');
 const errorHandler = require('./src/middleware/errorHandler');
 const { initModelReferences } = require('./src/services/modelLifecycleService');
+const { ensureDefaultArcConfig } = require('./src/controllers/arcController');
 
 // Route modules
 const authRoutes = require('./src/routes/auth');
@@ -31,7 +32,22 @@ const app = express();
 // ============================================================
 app.use(helmet({ contentSecurityPolicy: false })); // Sets secure HTTP headers
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://172.20.33.1:5173'],
+  origin: (origin, callback) => {
+    // Allow non-browser requests (e.g. curl, server-to-server, edge client-agent scripts)
+    if (!origin) return callback(null, true);
+
+    // Allow localhost, 127.0.0.1, private LAN subnets (10.x, 192.168.x, 172.16-31.x), and ngrok tunnels
+    const isAllowed =
+      /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+      /^http:\/\/(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$/.test(origin) ||
+      /^https:\/\/.*\.ngrok(-free)?\.(app|dev|io)$/.test(origin) ||
+      config.nodeEnv === 'development'; // Always permit LAN dev connections in development
+
+    if (isAllowed) {
+      return callback(null, true);
+    }
+    return callback(new Error(`CORS origin not allowed: ${origin}`));
+  },
   credentials: true,
 }));
 
@@ -148,6 +164,14 @@ async function start() {
       console.warn('[ModelLifecycle] Warning during model references init:', modelInitErr.message);
     }
 
+    // Initialize & verify authoritative ARC configuration
+    try {
+      await ensureDefaultArcConfig();
+      console.log('[ARC] Authoritative ARC configuration synchronized');
+    } catch (arcInitErr) {
+      console.warn('[ARC] Warning during ARC config init:', arcInitErr.message);
+    }
+
     app.listen(PORT, "0.0.0.0" ,() => {
       console.log("Backend running on port 5000");
       console.log(`[Server] ARC-FL Backend running on http://localhost:${PORT}`);
@@ -160,9 +184,13 @@ async function start() {
   }
 }
 
-// Handle unhandled promise rejections gracefully
+// Handle unhandled promise rejections and uncaught exceptions gracefully
 process.on('unhandledRejection', (reason) => {
   console.error('[Process] Unhandled rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught exception:', err);
 });
 
 start();

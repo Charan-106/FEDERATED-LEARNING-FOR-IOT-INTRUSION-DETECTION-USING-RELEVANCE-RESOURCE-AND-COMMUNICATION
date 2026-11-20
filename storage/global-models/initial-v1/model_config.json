@@ -91,5 +91,6 @@
     "Covariance",
     "Variance",
     "Weight"
-  ]
+  ],
+  "isActive": false
 }

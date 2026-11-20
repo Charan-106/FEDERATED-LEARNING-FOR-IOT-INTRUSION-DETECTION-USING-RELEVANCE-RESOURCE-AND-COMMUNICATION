@@ -94,7 +94,7 @@ Start-Sleep -Seconds 2
 
 # 4. React Frontend
 Write-Host "[4/4] Starting React Frontend on port 5173..." -ForegroundColor Yellow
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd `"$PSScriptRoot\frontend`"; npm run dev -- --host 127.0.0.1 --port 5173"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd `"$PSScriptRoot\frontend`"; npm run dev -- --host 0.0.0.0 --port 5173"
 Start-Sleep -Seconds 3
 
 Write-Host "`nAll 4 services are running!" -ForegroundColor Green

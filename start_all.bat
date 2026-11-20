@@ -35,7 +35,7 @@ start "ARC-FL Node.js Backend (Port 5000)" cmd /k "cd /d "%PROJECT_ROOT%backend"
 timeout /t 2 /nobreak >nul
 
 echo [4/4] Starting React Frontend Dev Server on port 5173...
-start "ARC-FL React Frontend (Port 5173)" cmd /k "cd /d "%PROJECT_ROOT%frontend" && npm run dev -- --host 127.0.0.1 --port 5173"
+start "ARC-FL React Frontend (Port 5173)" cmd /k "cd /d "%PROJECT_ROOT%frontend" && npm run dev -- --host 0.0.0.0 --port 5173"
 timeout /t 3 /nobreak >nul
 
 echo.

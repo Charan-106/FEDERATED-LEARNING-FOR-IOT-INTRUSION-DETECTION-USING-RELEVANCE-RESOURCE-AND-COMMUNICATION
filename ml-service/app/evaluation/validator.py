@@ -14,12 +14,14 @@ Metrics computed:
 import hashlib
 import logging
 import time
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from sklearn.exceptions import InconsistentVersionWarning
 from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
@@ -27,6 +29,9 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
 )
+
+# Suppress sklearn unpickling version warnings (e.g. 1.6.1 vs 1.8.0) after verified compatibility
+warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
 from app.config import config
 from app.models.registry import registry

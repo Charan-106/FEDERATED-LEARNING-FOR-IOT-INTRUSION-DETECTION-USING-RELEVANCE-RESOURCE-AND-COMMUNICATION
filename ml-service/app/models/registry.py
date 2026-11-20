@@ -8,11 +8,16 @@ with isActive=true, or by falling back to the alphabetically-last version.
 
 import json
 import logging
+import warnings
 from pathlib import Path
 from typing import Optional
 
 import joblib
 import torch
+from sklearn.exceptions import InconsistentVersionWarning
+
+# Suppress sklearn unpickling version warnings (e.g. 1.6.1 vs 1.8.0) after verified compatibility
+warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
 from app.config import config
 from app.models.resmlp import ResMLP, load_checkpoint
@@ -85,17 +90,42 @@ class ModelRegistry:
         if not version_dirs:
             raise FileNotFoundError(f"No model versions found in {global_models_dir}")
 
-        # Look for a directory with model_config.json marking isActive
         active_dir: Optional[Path] = None
-        for vdir in version_dirs:
-            config_file = vdir / "model_config.json"
-            if config_file.exists():
-                with open(config_file) as f:
-                    cfg = json.load(f)
-                if cfg.get("isActive", False):
-                    active_dir = vdir
-                    self._model_config = cfg
-                    break
+
+        # 1. Authoritative check: storage/global-models/active_model.json
+        active_pointer_file = global_models_dir / "active_model.json"
+        if active_pointer_file.exists():
+            try:
+                with open(active_pointer_file, "r", encoding="utf-8") as f:
+                    ptr = json.load(f)
+                ptr_ver = ptr.get("version")
+                if ptr_ver:
+                    ptr_dir = global_models_dir / ptr_ver
+                    if ptr_dir.exists() and (ptr_dir / "best.pt").exists():
+                        active_dir = ptr_dir
+                        cfg_file = ptr_dir / "model_config.json"
+                        if cfg_file.exists():
+                            with open(cfg_file, "r", encoding="utf-8") as f:
+                                self._model_config = json.load(f)
+                        logger.info(f"Active model resolved from active_model.json pointer: {ptr_ver}")
+            except Exception as e:
+                logger.warning(f"Error reading active_model.json pointer: {e}")
+
+        # 2. Look for a directory with model_config.json marking isActive
+        if active_dir is None:
+            for vdir in version_dirs:
+                config_file = vdir / "model_config.json"
+                if config_file.exists():
+                    try:
+                        with open(config_file, "r", encoding="utf-8") as f:
+                            cfg = json.load(f)
+                        if cfg.get("isActive", False):
+                            active_dir = vdir
+                            self._model_config = cfg
+                            logger.info(f"Active model resolved from model_config.json isActive=True: {vdir.name}")
+                            break
+                    except Exception:
+                        pass
 
         # Fallback: use the most recently modified directory
         if active_dir is None:

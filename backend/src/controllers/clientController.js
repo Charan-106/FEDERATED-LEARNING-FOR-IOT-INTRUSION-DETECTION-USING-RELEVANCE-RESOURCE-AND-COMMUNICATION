@@ -207,7 +207,7 @@ async function submitUpdate(req, res, next) {
 
     const submission = await prisma.clientSubmission.create({
       data: {
-        roundId,
+        roundId: round.id,
         clientId: clientProfile.clientId,
         localAccuracy: localAccuracy ? parseFloat(localAccuracy) : null,
         localLoss: localLoss ? parseFloat(localLoss) : null,
@@ -239,7 +239,7 @@ async function submitUpdate(req, res, next) {
         // Save ARC score to DB
         await prisma.aRCScore.create({
           data: {
-            roundId,
+            roundId: round.id,
             submissionId: submission.id,
             clientId: clientProfile.clientId,
             relevanceScore: arcResult.relevance_score ?? 0.0,
@@ -681,7 +681,7 @@ async function submitTrainedUpdate(req, res, next) {
 
     const submission = await prisma.clientSubmission.create({
       data: {
-        roundId,
+        roundId: round.id,
         clientId: clientProfile.clientId,
         localAccuracy: localAccuracy ? parseFloat(localAccuracy) : null,
         localLoss: localLoss ? parseFloat(localLoss) : null,
@@ -758,7 +758,7 @@ async function submitTrainedUpdate(req, res, next) {
       const arcResult = await mlServiceClient.calculateARC({
         submissionId: submission.id,
         clientId: clientProfile.clientId,
-        roundId,
+        roundId: round.id,
         modelPath: updatePath,
         localAccuracy: parseFloat(localAccuracy || 0),
         localLoss: parseFloat(localLoss || 0),
@@ -774,7 +774,7 @@ async function submitTrainedUpdate(req, res, next) {
       if (arcResult && arcResult.overall_arc_score !== undefined) {
         await prisma.aRCScore.create({
           data: {
-            roundId,
+            roundId: round.id,
             submissionId: submission.id,
             clientId: clientProfile.clientId,
             relevanceScore: arcResult.relevance_score ?? 0.0,

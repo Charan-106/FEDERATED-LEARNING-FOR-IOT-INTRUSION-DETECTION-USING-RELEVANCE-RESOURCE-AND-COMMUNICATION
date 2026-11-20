@@ -290,6 +290,19 @@ async function createRound(req, res, next) {
 
     const initialStatus = (autoStart || status === 'ACTIVE') ? 'ACTIVE' : 'CREATED';
 
+    if (initialStatus === 'ACTIVE') {
+      // Conclude prior active rounds to guarantee strictly one active round in the platform
+      const previousActive = await prisma.trainingRound.findMany({ where: { status: 'ACTIVE' } });
+      for (const prev of previousActive) {
+        const subCount = await prisma.clientSubmission.count({ where: { roundId: prev.id } });
+        const nextStatus = subCount > 0 ? 'COMPLETED' : 'CANCELLED';
+        await prisma.trainingRound.update({
+          where: { id: prev.id },
+          data: { status: nextStatus, completedAt: new Date() },
+        });
+      }
+    }
+
     const round = await prisma.trainingRound.create({
       data: {
         roundNumber,
@@ -461,6 +474,17 @@ async function startRound(req, res, next) {
     if (round.status !== 'CREATED') {
       return res.status(400).json({
         error: `Cannot start round in status '${round.status}'. Only CREATED rounds can be started.`,
+      });
+    }
+
+    // Conclude any prior active rounds
+    const previousActive = await prisma.trainingRound.findMany({ where: { status: 'ACTIVE', id: { not: roundId } } });
+    for (const prev of previousActive) {
+      const subCount = await prisma.clientSubmission.count({ where: { roundId: prev.id } });
+      const nextStatus = subCount > 0 ? 'COMPLETED' : 'CANCELLED';
+      await prisma.trainingRound.update({
+        where: { id: prev.id },
+        data: { status: nextStatus, completedAt: new Date() },
       });
     }
 
